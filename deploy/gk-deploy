@@ -39,8 +39,8 @@ SSH_KEYFILE="/dev/null"
 SSH_USER="root"
 SSH_SUDO="false"
 SSH_PORT="22"
-ADMIN_KEY=""
-USER_KEY=""
+ADMIN_KEY="heketi-admin"
+USER_KEY="heketi"
 DAEMONSET_LABEL=""
 DEPLOY_OBJECT=1
 OBJ_ACCOUNT=""
@@ -107,14 +107,14 @@ Options:
   -w SECONDS, --wait SECONDS
               Wait SECONDS seconds for pods to become ready. Default is '${WAIT}'.
 
-  --admin-key ADMIN_KEY
+  --admin-key ADMIN_KEY (Required)
               Secret string for heketi admin user. heketi admin has access to
-              all APIs and commands. Default is to use no secret.
+              all APIs and commands. Default is to use secret '${ADMIN_KEY}'.
 
   --user-key USER_KEY
               Secret string for general heketi users. heketi users have access
               to only Volume APIs. Used in dynamic provisioning. Default is to
-              use no secret.
+              use secret '${USER_KEY}'.
 
   --daemonset-label DAEMONSET_LABEL
               Controls the value of the label set on nodes which will host pods
@@ -765,7 +765,11 @@ fi
 if [[ ${EXISTS_DEPLOY_HEKETI} -eq 0 ]] && [[ ${EXISTS_HEKETI} -eq 0 ]]; then
   #The FSTAB variable may contain slashes as path separators, so use '#' as the expression delimiter instead
   sed -e "s/\${HEKETI_EXECUTOR}/${EXECUTOR}/" -e "s#\${HEKETI_FSTAB}#${FSTAB}#" -e "s/\${SSH_PORT}/${SSH_PORT}/" -e "s/\${SSH_USER}/${SSH_USER}/" -e "s/\${SSH_SUDO}/${SSH_SUDO}/" "${SCRIPT_DIR}/heketi.json.template" > heketi.json
-  eval_output "${CLI} create secret generic heketi-config-secret --from-file=private_key=${SSH_KEYFILE} --from-file=./heketi.json --from-file=topology.json=${TOPOLOGY}"
+  if [[ "${EXECUTOR}" == "ssh" ]]; then
+    eval_output "${CLI} create secret generic heketi-config-secret --from-file=private_key=${SSH_KEYFILE} --from-file=./heketi.json --from-file=topology.json=${TOPOLOGY}"
+  else
+    eval_output "${CLI} create secret generic heketi-config-secret --from-file=./heketi.json --from-file=topology.json=${TOPOLOGY}"
+  fi
   eval_output "${CLI} label --overwrite secret heketi-config-secret glusterfs=heketi-config-secret heketi=config-secret"
   rm -f heketi.json
   if [[ "${CLI}" == *oc\ * ]]; then
@@ -800,17 +804,29 @@ if [[ ${EXISTS_DEPLOY_HEKETI} -eq 1 ]] && [[ ${EXISTS_HEKETI} -eq 0 ]]; then
 
   if [[ "${CLI}" == *oc\ * ]]; then
     heketi_service=$(${CLI} describe routes/deploy-heketi | grep "Requested Host:" | awk '{print $3}')
-  fi
-
-  hello=$(curl "http://${heketi_service}/hello" 2>/dev/null)
-  if [[ "${hello}" != "Hello from Heketi" ]]; then
-    output "Failed to communicate with deploy-heketi service."
-    if [[ "${CLI}" == *oc\ * ]]; then
+    hello=$(curl "http://${heketi_service}/hello" 2>/dev/null)
+    if [[ "${hello}" != "Hello from Heketi" ]]; then
+      output "Failed to communicate with deploy-heketi service."
       output "Please verify that a router has been properly configured."
+      exit 1
     fi
-    exit 1
-  else
     debug "OK"
+  else
+    debug "Expose heketi-test service with NodePort"
+    eval_output "${CLI} expose deploy deploy-heketi --type=NodePort --name=heketi-test"
+    node_port=$(${CLI} get svc | grep "heketi-test" | awk '{print $5}' | cut -d':' -f2 | cut -d'/' -f1)
+    master_node=$(${CLI} cluster-info | grep master | awk '{print $6}' | cut -d':' -f2)
+    hello=$(curl "http:${master_node}:${node_port}/hello" 2>/dev/null)
+    if [[ "${hello}" != "Hello from Heketi" ]]; then
+      output "Failed to communicate with deploy-heketi service."
+      output "Please verify that service has been properly configured."
+      debug "Cleanup NodePort test"
+      eval_output "${CLI} delete service heketi-test"
+      exit 1
+    fi
+    debug "OK"
+    debug "Cleanup NodePort test"
+    eval_output "${CLI} delete service heketi-test"
   fi
 
   heketi_pod=$(${CLI} get pod --no-headers --show-all --selector="deploy-heketi" | awk '{print $1}')
