@@ -822,7 +822,15 @@ if [[ ${EXISTS_DEPLOY_HEKETI} -eq 1 ]] && [[ ${EXISTS_HEKETI} -eq 0 ]]; then
       output "Please verify that service has been properly configured."
       debug "Cleanup NodePort test"
       eval_output "${CLI} delete service heketi-test"
-      exit 1
+      output "
+      Do you wish to proceed with deployment?
+      "
+      read -rp "[Y]es, [N]o? [Default: Y]: " ynopt
+      case $ynopt in
+        N*|n*)
+        exit
+        ;;
+      esac
     fi
     debug "OK"
     debug "Cleanup NodePort test"
@@ -928,7 +936,16 @@ else
       output "Please verify that service has been properly configured."
       debug "Cleanup NodePort test"
       eval_output "${CLI} delete service heketi-test"
-      exit 1
+
+      output "
+      Do you wish to proceed with deployment?
+      "
+      read -rp "[Y]es, [N]o? [Default: Y]: " ynopt
+      case $ynopt in
+        N*|n*)
+        exit
+        ;;
+      esac
     fi
     debug "Cleanup NodePort test"
     eval_output "${CLI} delete service heketi-test"
